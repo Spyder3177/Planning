@@ -1024,36 +1024,7 @@ function cancelCalib(){
   calibPlanningIdx = -1;
 }
 
-// Pendant la calibration, le touchend sur le viewport enregistre la colonne
-// On utilise touchend (et non click) car le viewport a preventDefault sur touchstart
-lbVp.addEventListener('touchend', function(e){
-  if(calibPlanningIdx < 0) return;
-  // Ignorer si c'est un geste multi-touch (pinch)
-  if(e.changedTouches.length !== 1) return;
-  // Ignorer les doubles-taps (gérés ailleurs) — laisser passer le simple tap calibration
-  const touch = e.changedTouches[0];
-  const vp  = document.getElementById('lbViewport');
-  const img = document.getElementById('lbImg');
-  const tapX = touch.clientX - vp.getBoundingClientRect().left;
-  const imgX = (tapX - lb.tx) / lb.scale;
-  const colPct = Math.max(0, Math.min(100, Math.round((imgX / img.naturalWidth) * 100)));
-  const p = state.plannings[calibPlanningIdx];
-  if(!p) return;
-  p.colPct = colPct;
-  state.plannings[calibPlanningIdx] = p;
-  save(); renderPlannings();
-  showToast('Colonne calibrée (' + colPct + '%) ✓ — re-tap ▶ pour zoomer');
-  cancelCalib();
-});
-
-// Ligne verticale qui suit le doigt pendant la calibration
-lbVp.addEventListener('touchmove', function(e){
-  if(calibPlanningIdx < 0) return;
-  const line = document.getElementById('lbCalibLine');
-  const x = e.touches[0].clientX;
-  line.style.display = 'block';
-  line.style.left = x + 'px';
-}, {passive: true});
+// [listeners calibration déplacés après déclaration lbVp]
 
 function archivePlanning(idx){
   const p=state.plannings[idx];if(!p)return;
@@ -1251,7 +1222,38 @@ lbVp.addEventListener('touchstart',e=>{if(e.touches.length===1){lb.panning=true;
 lbVp.addEventListener('touchmove',e=>{if(e.touches.length===1&&lb.panning){lb.tx=lb.startTx+(e.touches[0].clientX-lb.startX);lb.ty=lb.startTy+(e.touches[0].clientY-lb.startY);lbClamp();applyLbT();}else if(e.touches.length===2){const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);const midX=(e.touches[0].clientX+e.touches[1].clientX)/2,midY=(e.touches[0].clientY+e.touches[1].clientY)/2;lbZoomAt(midX,midY,(dist-lb.lastDist)*0.008*lb.scale);lb.lastDist=dist;}e.preventDefault();},{passive:false});
 lbVp.addEventListener('touchend',e=>{if(e.touches.length===0)lb.panning=false;});
 let lbLastTap=0;
-lbVp.addEventListener('touchend',e=>{const now=Date.now();if(now-lbLastTap<280&&e.changedTouches.length===1){const t=e.changedTouches[0];lb.scale<1.8?lbZoomAt(t.clientX,t.clientY,lb.scale*1.5):lbReset();}lbLastTap=now;});
+lbVp.addEventListener('touchend',e=>{
+  // ── Calibration colonne ──────────────────
+  if(calibPlanningIdx >= 0){
+    if(e.changedTouches.length !== 1) return;
+    const touch = e.changedTouches[0];
+    const vp  = document.getElementById('lbViewport');
+    const img = document.getElementById('lbImg');
+    const tapX = touch.clientX - vp.getBoundingClientRect().left;
+    const imgX = (tapX - lb.tx) / lb.scale;
+    const colPct = Math.max(0, Math.min(100, Math.round((imgX / img.naturalWidth) * 100)));
+    const p = state.plannings[calibPlanningIdx];
+    if(p){ p.colPct=colPct; state.plannings[calibPlanningIdx]=p; save(); renderPlannings(); }
+    showToast('Colonne calibrée ('+colPct+'%) ✓ — tap ▶ pour zoomer');
+    cancelCalib();
+    return; // ne pas déclencher le double-tap
+  }
+  // ── Double-tap zoom ───────────────────────
+  const now=Date.now();
+  if(now-lbLastTap<280&&e.changedTouches.length===1){
+    const t=e.changedTouches[0];
+    lb.scale<1.8?lbZoomAt(t.clientX,t.clientY,lb.scale*1.5):lbReset();
+  }
+  lbLastTap=now;
+});
+
+// Ligne verticale qui suit le doigt en mode calibration
+lbVp.addEventListener('touchmove',e=>{
+  if(calibPlanningIdx < 0) return;
+  const line=document.getElementById('lbCalibLine');
+  line.style.display='block';
+  line.style.left=e.touches[0].clientX+'px';
+},{passive:true});
 lbVp.addEventListener('mousedown',e=>{lb.panning=true;lb.startX=e.clientX;lb.startY=e.clientY;lb.startTx=lb.tx;lb.startTy=lb.ty;lbVp.classList.add('grabbing');});
 lbVp.addEventListener('mousemove',e=>{if(!lb.panning)return;lb.tx=lb.startTx+(e.clientX-lb.startX);lb.ty=lb.startTy+(e.clientY-lb.startY);lbClamp();applyLbT();});
 lbVp.addEventListener('mouseup',()=>{lb.panning=false;lbVp.classList.remove('grabbing');});
