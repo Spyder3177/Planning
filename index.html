@@ -234,6 +234,31 @@
     .btn-clear-day { background:none; border:1px solid var(--border); color:var(--danger); padding:11px 14px; border-radius:var(--rs); font-size:13px; cursor:pointer; }
     .btn-save-day { flex:1; background:linear-gradient(135deg,var(--accent),var(--accent2)); border:none; color:#fff; padding:12px; border-radius:var(--rs); font-family:var(--fh); font-size:13px; font-weight:700; cursor:pointer; }
 
+    /* ── CALIBRATION COLONNE ── */
+    #lbCalibOverlay {
+      display: none; position: absolute; inset: 0; z-index: 10;
+      background: rgba(0,0,0,.45); cursor: crosshair;
+      align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+    }
+    #lbCalibOverlay.open { display: flex; }
+    .calib-msg {
+      background: rgba(15,17,23,.92); border: 1px solid var(--accent);
+      color: var(--text); font-family: var(--fh); font-size: 14px; font-weight: 700;
+      padding: 14px 20px; border-radius: var(--r); text-align: center;
+      pointer-events: none; line-height: 1.5;
+    }
+    .calib-cancel {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--dim);
+      font-family: var(--fb); font-size: 13px; padding: 9px 20px; border-radius: 20px;
+      cursor: pointer;
+    }
+    /* Ligne verticale qui suit le doigt pendant la calibration */
+    #lbCalibLine {
+      position: absolute; top: 0; bottom: 0; width: 2px;
+      background: var(--accent); box-shadow: 0 0 6px rgba(79,142,247,.8);
+      pointer-events: none; display: none; transform: translateX(-50%);
+    }
+
     /* ── TOAST ── */
     .toast { position:fixed; bottom:calc(18px + var(--sab)); left:50%; transform:translateX(-50%) translateY(14px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:10px 18px; border-radius:28px; font-size:13px; opacity:0; transition:all .3s; white-space:nowrap; z-index:5000; pointer-events:none; }
     .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
@@ -424,9 +449,15 @@
       <button class="lb-close" onclick="closeLightbox()">✕</button>
     </div>
   </div>
-  <div class="lb-hint">Pincez · Glissez · Double-tap</div>
-  <div id="lbViewport">
+  <div class="lb-hint" id="lbHint">Pincez · Glissez · Double-tap</div>
+  <div id="lbViewport" style="position:relative">
     <div id="lbImgWrap"><img id="lbImg" src="" alt="" draggable="false" /></div>
+    <!-- Overlay calibration colonne -->
+    <div id="lbCalibOverlay">
+      <div class="calib-msg">👆 Appuyez sur votre colonne<br><span style="font-size:11px;font-weight:400;color:var(--dim)">Zoom · Glissez pour positionner · puis tap</span></div>
+      <button class="calib-cancel" onclick="cancelCalib()">Annuler</button>
+    </div>
+    <div id="lbCalibLine"></div>
   </div>
 </div>
 
@@ -866,6 +897,9 @@ function renderPlannings(){
       const linePercent=getCurrentWeekLinePercent(p);
       const lineHtml=linePercent!==null
         ?`<div class="week-line-indicator visible" style="top:${linePercent}%" title="Semaine en cours"></div>`:'';
+      const colCalib=p.colPct!=null
+        ?`<button class="btn-jump-week" style="background:rgba(90,100,128,.12);border-color:rgba(90,100,128,.3);color:var(--muted)" onclick="recalibrateCol(event,${i})" title="Recalibrer la colonne">📍${p.colPct}%</button>`
+        :'';
       const jumpBtn=linePercent!==null
         ?`<button class="btn-jump-week" onclick="jumpToWeekLine(event,${i})">▶ S. en cours</button>`:'';
       const label=p.label||`Planning ${i+1}`;
@@ -879,7 +913,7 @@ function renderPlannings(){
                 value="${label.replace(/"/g,'&quot;')}" />
               <button class="btn-icon" style="width:18px;height:18px;font-size:9px;border:none;background:none;color:var(--muted)" onclick="renameCard(${i})" title="Renommer">✏️</button>
             </div>
-            <div class="card-meta">${fmtDate(p.addedAt)}${ph}<button class="btn-jump-week" style="background:rgba(90,100,128,.12);border-color:rgba(90,100,128,.3);color:var(--dim)" onclick="editPeriod(event,${i})" title="Modifier la période">✏️ période</button>${jumpBtn}</div>
+            <div class="card-meta">${fmtDate(p.addedAt)}${ph}<button class="btn-jump-week" style="background:rgba(90,100,128,.12);border-color:rgba(90,100,128,.3);color:var(--dim)" onclick="editPeriod(event,${i})" title="Modifier la période">✏️ période</button>${colCalib}${jumpBtn}</div>
           </div>
           <div class="card-actions">
             <button class="btn-icon" onclick="openLightbox(${i})">⤢</button>
@@ -898,28 +932,122 @@ function renderPlannings(){
   });
 }
 
-// Ouvre la lightbox et zoome sur la ligne de la semaine en cours
-function jumpToWeekLine(e,idx){
+// ══════════════════════════════════════════
+// CALIBRATION COLONNE + ZOOM S. EN COURS
+// ══════════════════════════════════════════
+let calibPlanningIdx = -1; // index du planning en cours de calibration
+
+// Lance le zoom ligne+colonne, ou ouvre la calibration si colPct non défini
+function jumpToWeekLine(e, idx){
   e.stopPropagation();
-  const p=state.plannings[idx];if(!p)return;
-  const linePercent=getCurrentWeekLinePercent(p);
+  const p = state.plannings[idx]; if(!p) return;
+  const linePercent = getCurrentWeekLinePercent(p);
   openLightbox(idx);
-  if(linePercent===null)return;
+  if(linePercent === null) return;
+
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    const vp=document.getElementById('lbViewport');
-    const img=document.getElementById('lbImg');
-    const doZoom=()=>{
-      if(!img.naturalWidth){setTimeout(doZoom,80);return;}
-      const targetScale=2.8;
-      lb.scale=targetScale;
-      lb.tx=(vp.offsetWidth-img.naturalWidth*lb.scale)/2;
-      const targetY=(img.naturalHeight*(linePercent/100))*lb.scale;
-      lb.ty=Math.min(0,(vp.offsetHeight/2)-targetY);
-      lbClamp();applyLbT();
+    const img = document.getElementById('lbImg');
+    const doAction = () => {
+      if(!img.naturalWidth){ setTimeout(doAction, 80); return; }
+      if(p.colPct != null){
+        // Colonne déjà calibrée → zoom direct 2D
+        zoomToCell(linePercent, p.colPct);
+      } else {
+        // Pas encore calibré → mode calibration
+        openCalibMode(idx, linePercent);
+      }
     };
-    doZoom();
+    doAction();
   }));
 }
+
+// Zoom centré sur intersection ligne (rowPct%) × colonne (colPct%)
+function zoomToCell(rowPct, colPct){
+  const vp  = document.getElementById('lbViewport');
+  const img = document.getElementById('lbImg');
+  const SCALE = 4.0;
+  lb.scale = SCALE;
+  // Centre horizontal sur la colonne
+  const targetX = (img.naturalWidth  * (colPct/100)) * SCALE;
+  const targetY = (img.naturalHeight * (rowPct /100)) * SCALE;
+  lb.tx = Math.min(0, (vp.offsetWidth  / 2) - targetX);
+  lb.ty = Math.min(0, (vp.offsetHeight / 2) - targetY);
+  lbClamp(); applyLbT();
+}
+
+// Réinitialiser la calibration et relancer
+function recalibrateCol(e, idx){
+  e.stopPropagation();
+  const p = state.plannings[idx]; if(!p) return;
+  p.colPct = null;
+  state.plannings[idx] = p;
+  save(); renderPlannings();
+  // Relancer le zoom qui déclenchera la calibration
+  const linePercent = getCurrentWeekLinePercent(p);
+  openLightbox(idx);
+  if(linePercent === null) return;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const img = document.getElementById('lbImg');
+    const doAction = () => {
+      if(!img.naturalWidth){ setTimeout(doAction, 80); return; }
+      openCalibMode(idx, linePercent);
+    };
+    doAction();
+  }));
+}
+
+// Active le mode calibration : l'utilisateur tape sur sa colonne
+function openCalibMode(idx, linePercent){
+  calibPlanningIdx = idx;
+  // Afficher la ligne de semaine pour que l'utilisateur sache où taper
+  zoomToCell(linePercent, 50); // centré horizontalement en attendant
+  const overlay = document.getElementById('lbCalibOverlay');
+  overlay.classList.add('open');
+  document.getElementById('lbHint').style.display = 'none';
+}
+
+function cancelCalib(){
+  document.getElementById('lbCalibOverlay').classList.remove('open');
+  document.getElementById('lbCalibLine').style.display = 'none';
+  document.getElementById('lbHint').style.display = '';
+  calibPlanningIdx = -1;
+}
+
+// Tap sur le viewport pendant la calibration → mémoriser le X%
+document.getElementById('lbViewport').addEventListener('click', function(e){
+  if(calibPlanningIdx < 0) return;
+  // Ne pas déclencher si tap sur les boutons de l'overlay
+  if(e.target.closest('#lbCalibOverlay')) return;
+
+  const vp   = document.getElementById('lbViewport');
+  const img  = document.getElementById('lbImg');
+  // Convertir la position du tap en % sur l'image naturelle
+  const tapX = e.clientX - vp.getBoundingClientRect().left;
+  // lb.tx et lb.scale permettent de remonter aux coordonnées image
+  const imgX = (tapX - lb.tx) / lb.scale;
+  const colPct = Math.max(0, Math.min(100, Math.round((imgX / img.naturalWidth) * 100)));
+
+  const p = state.plannings[calibPlanningIdx];
+  if(!p) return;
+  p.colPct = colPct;
+  state.plannings[calibPlanningIdx] = p;
+  save();
+  renderPlannings();
+
+  // Feedback visuel
+  showToast('Colonne calibrée (' + colPct + '%) ✓ — recliquez ▶ pour zoomer');
+  cancelCalib();
+});
+
+// Afficher une ligne verticale qui suit le doigt (touchmove) pendant la calibration
+document.getElementById('lbViewport').addEventListener('touchmove', function(e){
+  if(calibPlanningIdx < 0) return;
+  const line = document.getElementById('lbCalibLine');
+  const vp   = document.getElementById('lbViewport');
+  const x = e.touches[0].clientX - vp.getBoundingClientRect().left;
+  line.style.display = 'block';
+  line.style.left = x + 'px';
+}, {passive: true});
 
 function archivePlanning(idx){
   const p=state.plannings[idx];if(!p)return;
