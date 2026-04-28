@@ -337,10 +337,25 @@
       <div class="section-title">Notifications</div>
       <div class="settings-section">
         <div class="settings-row">
-          <div><div class="settings-label">Rappel lundi matin</div><div class="settings-sub">Notification à 8h00 — vérifier son code de la semaine</div></div>
+          <div><div class="settings-label">Rappel hebdomadaire</div><div class="settings-sub" id="notifDesc">Non configuré</div></div>
           <div style="display:flex;align-items:center;gap:8px">
             <span class="notif-status off" id="notifStatus">Off</span>
             <button class="btn-settings" id="notifBtn" onclick="toggleNotif()">Activer</button>
+          </div>
+        </div>
+        <div class="settings-row" id="notifPickerRow" style="display:none;flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="settings-label" style="font-size:12px">Choisir le jour et l'heure</div>
+          <div style="display:flex;gap:8px;width:100%">
+            <select id="notifDay" onchange="saveNotifPrefs()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--rs);font-family:var(--fb);font-size:13px;outline:none">
+              <option value="1">Lundi</option>
+              <option value="2">Mardi</option>
+              <option value="3">Mercredi</option>
+              <option value="4">Jeudi</option>
+              <option value="5">Vendredi</option>
+              <option value="6">Samedi</option>
+              <option value="0">Dimanche</option>
+            </select>
+            <input id="notifTime" type="time" value="08:00" onchange="saveNotifPrefs()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--rs);font-family:var(--fb);font-size:13px;outline:none" />
           </div>
         </div>
       </div>
@@ -542,8 +557,35 @@ document.getElementById('importFile').addEventListener('change',function(e){
 });
 
 // ══════════════════════════════════════════
-// NOTIFICATIONS
+// NOTIFICATIONS — jour et heure configurables
 // ══════════════════════════════════════════
+const JOUR_NOMS=['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+
+function getNotifPrefs(){
+  return{
+    day:  parseInt(localStorage.getItem('notifDay')||'1'),
+    hour: parseInt(localStorage.getItem('notifHour')||'8'),
+    min:  parseInt(localStorage.getItem('notifMin')||'0'),
+  };
+}
+
+function saveNotifPrefs(){
+  const dayEl=document.getElementById('notifDay');
+  const timeEl=document.getElementById('notifTime');
+  if(!dayEl||!timeEl)return;
+  const parts=(timeEl.value||'08:00').split(':');
+  const h=parseInt(parts[0]),m=parseInt(parts[1]);
+  localStorage.setItem('notifDay',dayEl.value);
+  localStorage.setItem('notifHour',String(h));
+  localStorage.setItem('notifMin',String(m));
+  if(localStorage.getItem('notifEnabled')==='1'){
+    clearTimeout(window._notifTimer);
+    scheduleWeeklyNotif();
+  }
+  updateNotifUI();
+  showToast('Rappel mis à jour ✓');
+}
+
 function updateNotifUI(){
   const granted='Notification' in window && Notification.permission==='granted';
   const enabled=localStorage.getItem('notifEnabled')==='1';
@@ -551,6 +593,22 @@ function updateNotifUI(){
   document.getElementById('notifStatus').textContent=active?'On':'Off';
   document.getElementById('notifStatus').className='notif-status '+(active?'on':'off');
   document.getElementById('notifBtn').textContent=active?'Désactiver':'Activer';
+  const row=document.getElementById('notifPickerRow');
+  if(row)row.style.display=active?'flex':'none';
+  const prefs=getNotifPrefs();
+  const dayEl=document.getElementById('notifDay');
+  const timeEl=document.getElementById('notifTime');
+  if(dayEl)dayEl.value=String(prefs.day);
+  if(timeEl)timeEl.value=String(prefs.hour).padStart(2,'0')+':'+String(prefs.min).padStart(2,'0');
+  const desc=document.getElementById('notifDesc');
+  if(desc){
+    if(active){
+      const hStr=String(prefs.hour).padStart(2,'0')+':'+String(prefs.min).padStart(2,'0');
+      desc.textContent='Chaque '+JOUR_NOMS[prefs.day]+' à '+hStr;
+    }else{
+      desc.textContent='Non configuré';
+    }
+  }
 }
 
 function toggleNotif(){
@@ -558,13 +616,17 @@ function toggleNotif(){
   const enabled=localStorage.getItem('notifEnabled')==='1';
   if(enabled){
     localStorage.setItem('notifEnabled','0');
+    clearTimeout(window._notifTimer);
     updateNotifUI();showToast('Rappel désactivé');return;
   }
   Notification.requestPermission().then(perm=>{
     if(perm==='granted'){
       localStorage.setItem('notifEnabled','1');
       scheduleWeeklyNotif();
-      updateNotifUI();showToast('Rappel lundi 8h activé ✓');
+      updateNotifUI();
+      const prefs=getNotifPrefs();
+      const hStr=String(prefs.hour).padStart(2,'0')+':'+String(prefs.min).padStart(2,'0');
+      showToast('Rappel '+JOUR_NOMS[prefs.day]+' '+hStr+' activé ✓');
     }else{
       showToast('Permission refusée — autorisez dans les Réglages');
     }
@@ -574,26 +636,30 @@ function toggleNotif(){
 function scheduleWeeklyNotif(){
   if(!('Notification' in window)||Notification.permission!=='granted')return;
   if(localStorage.getItem('notifEnabled')!=='1')return;
+  const prefs=getNotifPrefs();
   const now=new Date();
   const next=new Date(now);
-  const day=now.getDay();
-  const daysUntilMonday=day===1&&now.getHours()<8?0:(8-day)%7||7;
-  next.setDate(now.getDate()+daysUntilMonday);
-  next.setHours(8,0,0,0);
+  const targetDay=prefs.day;
+  const currentDay=now.getDay();
+  let daysUntil=(targetDay-currentDay+7)%7;
+  if(daysUntil===0&&(now.getHours()>prefs.hour||(now.getHours()===prefs.hour&&now.getMinutes()>=prefs.min))){
+    daysUntil=7;
+  }
+  next.setDate(now.getDate()+daysUntil);
+  next.setHours(prefs.hour,prefs.min,0,0);
   const ms=next-now;
-  setTimeout(()=>{
+  window._notifTimer=setTimeout(()=>{
     if(localStorage.getItem('notifEnabled')!=='1')return;
     if(Notification.permission==='granted'){
       const[,wn]=getWeekNum(new Date());
       new Notification('Mon Planning — S'+wn,{
-        body:'N\'oubliez pas de vérifier votre code de la semaine !',
+        body:"N'oubliez pas de vérifier votre code de la semaine !",
         icon:'https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/72x72/1f4c5.png',
         tag:'weekly-reminder'
       });
     }
     scheduleWeeklyNotif();
   },ms);
-}
 
 // ══════════════════════════════════════════
 // SWIPE NAVIGATION
@@ -775,6 +841,19 @@ function renameCard(idx){
   }
 }
 
+// Éditer la période d'un planning déjà importé (inline dans la card-meta)
+function editPeriod(e,idx){
+  e.stopPropagation();
+  const p=state.plannings[idx];if(!p)return;
+  // Petit prompt natif — simple et fiable sur mobile
+  const val=prompt('Période du planning (ex: S16 → S28) :', p.period||'');
+  if(val===null)return; // annulé
+  p.period=val.trim();
+  state.plannings[idx]=p;
+  save();renderPlannings();
+  showToast('Période mise à jour ✓');
+}
+
 function renderPlannings(){
   ensureSlots();
   const stack=document.getElementById('planningStack');stack.innerHTML='';
@@ -799,7 +878,7 @@ function renderPlannings(){
                 value="${label.replace(/"/g,'&quot;')}" />
               <button class="btn-icon" style="width:18px;height:18px;font-size:9px;border:none;background:none;color:var(--muted)" onclick="renameCard(${i})" title="Renommer">✏️</button>
             </div>
-            <div class="card-meta">${fmtDate(p.addedAt)}${ph}${jumpBtn}</div>
+            <div class="card-meta">${fmtDate(p.addedAt)}${ph}<button class="btn-jump-week" style="background:rgba(90,100,128,.12);border-color:rgba(90,100,128,.3);color:var(--dim)" onclick="editPeriod(event,${i})" title="Modifier la période">✏️ période</button>${jumpBtn}</div>
           </div>
           <div class="card-actions">
             <button class="btn-icon" onclick="openLightbox(${i})">⤢</button>
@@ -880,7 +959,12 @@ function renderHistory(){
     const ph=item.period?`<span style="font-size:9px;color:var(--accent);margin-left:5px">${item.period}</span>`:'';
     info.innerHTML=`<div class="history-slot">${item.label}${ph}</div><div class="history-date">Archivé le ${fmtDate(item.archivedAt)}</div>`;
     const rb=document.createElement('button');rb.className='history-restore';rb.textContent='↩ Restaurer';rb.onclick=()=>restoreHistory(realIdx);
-    info.appendChild(rb);row.appendChild(thumb);row.appendChild(info);list.appendChild(row);
+    const cb=document.createElement('button');cb.className='history-restore';cb.style.cssText='color:var(--muted);border-color:rgba(90,100,128,.3);margin-left:4px';
+    // Affiche la taille estimée
+    const sizeKb=Math.round((item.dataUrl.length*0.75)/1024);
+    cb.textContent='🗜 '+sizeKb+'ko';cb.title='Réduire la qualité';
+    cb.onclick=()=>compressHistoryItem(realIdx,cb);
+    info.appendChild(rb);info.appendChild(cb);row.appendChild(thumb);row.appendChild(info);list.appendChild(row);
   });
   frag.appendChild(list);c.innerHTML='';c.appendChild(frag);
 }
@@ -893,6 +977,26 @@ function restoreHistory(idx){
   state.history.splice(idx,1);
   save();renderPlannings();renderHistory();updateStorageUI();showToast('Restauré dans le slot '+(slot+1));
 }
+// Recompresser une image de l'historique pour libérer de l'espace
+async function compressHistoryItem(idx,btn){
+  const item=state.history[idx];if(!item)return;
+  const before=Math.round((item.dataUrl.length*0.75)/1024);
+  btn.textContent='⏳…';btn.disabled=true;
+  try{
+    // Réduire à 600px max, qualité 0.45 — forte compression pour archivage
+    const compressed=await compressImage(item.dataUrl,600,0.45);
+    const after=Math.round((compressed.length*0.75)/1024);
+    state.history[idx]={...item,dataUrl:compressed};
+    save();
+    btn.textContent='✓ '+after+'ko';
+    btn.style.color='var(--success)';
+    updateStorageUI();
+    showToast('Réduit : '+before+'ko → '+after+'ko');
+  }catch(e){
+    btn.textContent='Erreur';btn.disabled=false;
+  }
+}
+
 function clearHistory(){if(!confirm('Vider tout l\'historique ?'))return;state.history=[];save();renderHistory();updateStorageUI();showToast('Historique vidé');}
 
 // ══════════════════════════════════════════
