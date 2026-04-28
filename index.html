@@ -236,27 +236,37 @@
 
     /* ── CALIBRATION COLONNE ── */
     #lbCalibOverlay {
-      display: none; position: absolute; inset: 0; z-index: 10;
-      background: rgba(0,0,0,.45); cursor: crosshair;
-      align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+      display: none; position: fixed; inset: 0; z-index: 1100;
+      /* Transparent en bas pour laisser taper sur l'image,
+         sauf la zone message en haut */
+      background: transparent;
+      pointer-events: none; /* l'overlay lui-même ne bloque pas */
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding-bottom: calc(40px + var(--sab));
+      gap: 12px;
     }
     #lbCalibOverlay.open { display: flex; }
+    /* Le message et le bouton Annuler sont cliquables */
     .calib-msg {
-      background: rgba(15,17,23,.92); border: 1px solid var(--accent);
+      background: rgba(15,17,23,.95); border: 1px solid var(--accent);
       color: var(--text); font-family: var(--fh); font-size: 14px; font-weight: 700;
       padding: 14px 20px; border-radius: var(--r); text-align: center;
       pointer-events: none; line-height: 1.5;
+      box-shadow: 0 4px 20px rgba(0,0,0,.6);
     }
     .calib-cancel {
       background: var(--surface2); border: 1px solid var(--border); color: var(--dim);
-      font-family: var(--fb); font-size: 13px; padding: 9px 20px; border-radius: 20px;
-      cursor: pointer;
+      font-family: var(--fb); font-size: 13px; padding: 11px 28px; border-radius: 20px;
+      cursor: pointer; pointer-events: all; /* cliquable */
     }
     /* Ligne verticale qui suit le doigt pendant la calibration */
     #lbCalibLine {
-      position: absolute; top: 0; bottom: 0; width: 2px;
-      background: var(--accent); box-shadow: 0 0 6px rgba(79,142,247,.8);
-      pointer-events: none; display: none; transform: translateX(-50%);
+      position: fixed; top: 0; bottom: 0; width: 2px;
+      background: var(--accent); box-shadow: 0 0 8px rgba(79,142,247,.9);
+      pointer-events: none; display: none; z-index: 1101;
+      transform: translateX(-50%);
     }
 
     /* ── TOAST ── */
@@ -450,16 +460,17 @@
     </div>
   </div>
   <div class="lb-hint" id="lbHint">Pincez · Glissez · Double-tap</div>
-  <div id="lbViewport" style="position:relative">
+  <div id="lbViewport">
     <div id="lbImgWrap"><img id="lbImg" src="" alt="" draggable="false" /></div>
-    <!-- Overlay calibration colonne -->
-    <div id="lbCalibOverlay">
-      <div class="calib-msg">👆 Appuyez sur votre colonne<br><span style="font-size:11px;font-weight:400;color:var(--dim)">Zoom · Glissez pour positionner · puis tap</span></div>
-      <button class="calib-cancel" onclick="cancelCalib()">Annuler</button>
-    </div>
-    <div id="lbCalibLine"></div>
   </div>
 </div>
+
+<!-- CALIBRATION COLONNE — fixed par-dessus tout, hors du viewport lightbox -->
+<div id="lbCalibOverlay">
+  <div class="calib-msg">👆 Appuyez sur votre colonne<br><span style="font-size:11px;font-weight:400;color:var(--dim)">Zoom · Glissez d'abord pour centrer · puis tap</span></div>
+  <button class="calib-cancel" onclick="cancelCalib()">Annuler</button>
+</div>
+<div id="lbCalibLine"></div>
 
 <!-- SAISIE JOUR -->
 <div class="day-entry-modal" id="dayEntryModal">
@@ -1013,38 +1024,33 @@ function cancelCalib(){
   calibPlanningIdx = -1;
 }
 
-// Tap sur le viewport pendant la calibration → mémoriser le X%
-document.getElementById('lbViewport').addEventListener('click', function(e){
+// Pendant la calibration, le touchend sur le viewport enregistre la colonne
+// On utilise touchend (et non click) car le viewport a preventDefault sur touchstart
+lbVp.addEventListener('touchend', function(e){
   if(calibPlanningIdx < 0) return;
-  // Ne pas déclencher si tap sur les boutons de l'overlay
-  if(e.target.closest('#lbCalibOverlay')) return;
-
-  const vp   = document.getElementById('lbViewport');
-  const img  = document.getElementById('lbImg');
-  // Convertir la position du tap en % sur l'image naturelle
-  const tapX = e.clientX - vp.getBoundingClientRect().left;
-  // lb.tx et lb.scale permettent de remonter aux coordonnées image
+  // Ignorer si c'est un geste multi-touch (pinch)
+  if(e.changedTouches.length !== 1) return;
+  // Ignorer les doubles-taps (gérés ailleurs) — laisser passer le simple tap calibration
+  const touch = e.changedTouches[0];
+  const vp  = document.getElementById('lbViewport');
+  const img = document.getElementById('lbImg');
+  const tapX = touch.clientX - vp.getBoundingClientRect().left;
   const imgX = (tapX - lb.tx) / lb.scale;
   const colPct = Math.max(0, Math.min(100, Math.round((imgX / img.naturalWidth) * 100)));
-
   const p = state.plannings[calibPlanningIdx];
   if(!p) return;
   p.colPct = colPct;
   state.plannings[calibPlanningIdx] = p;
-  save();
-  renderPlannings();
-
-  // Feedback visuel
-  showToast('Colonne calibrée (' + colPct + '%) ✓ — recliquez ▶ pour zoomer');
+  save(); renderPlannings();
+  showToast('Colonne calibrée (' + colPct + '%) ✓ — re-tap ▶ pour zoomer');
   cancelCalib();
 });
 
-// Afficher une ligne verticale qui suit le doigt (touchmove) pendant la calibration
-document.getElementById('lbViewport').addEventListener('touchmove', function(e){
+// Ligne verticale qui suit le doigt pendant la calibration
+lbVp.addEventListener('touchmove', function(e){
   if(calibPlanningIdx < 0) return;
   const line = document.getElementById('lbCalibLine');
-  const vp   = document.getElementById('lbViewport');
-  const x = e.touches[0].clientX - vp.getBoundingClientRect().left;
+  const x = e.touches[0].clientX;
   line.style.display = 'block';
   line.style.left = x + 'px';
 }, {passive: true});
@@ -1239,7 +1245,7 @@ function lbClamp(){const vp=document.getElementById('lbViewport'),img=document.g
 function lbZoomAt(cx,cy,delta){const newScale=Math.max(0.1,Math.min(10,lb.scale+delta));const ratio=newScale/lb.scale;lb.tx=cx-(cx-lb.tx)*ratio;lb.ty=cy-(cy-lb.ty)*ratio;lb.scale=newScale;lbClamp();applyLbT();}
 function lbZoomBtn(d){const vp=document.getElementById('lbViewport');lbZoomAt(vp.offsetWidth/2,vp.offsetHeight/2,d*lb.scale);}
 function lbReset(){lbFitImage();}
-function closeLightbox(){document.getElementById('lightbox').classList.remove('open');}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open');cancelCalib();}
 const lbVp=document.getElementById('lbViewport');
 lbVp.addEventListener('touchstart',e=>{if(e.touches.length===1){lb.panning=true;lb.startX=e.touches[0].clientX;lb.startY=e.touches[0].clientY;lb.startTx=lb.tx;lb.startTy=lb.ty;}else if(e.touches.length===2){lb.panning=false;lb.lastDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);}e.preventDefault();},{passive:false});
 lbVp.addEventListener('touchmove',e=>{if(e.touches.length===1&&lb.panning){lb.tx=lb.startTx+(e.touches[0].clientX-lb.startX);lb.ty=lb.startTy+(e.touches[0].clientY-lb.startY);lbClamp();applyLbT();}else if(e.touches.length===2){const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);const midX=(e.touches[0].clientX+e.touches[1].clientX)/2,midY=(e.touches[0].clientY+e.touches[1].clientY)/2;lbZoomAt(midX,midY,(dist-lb.lastDist)*0.008*lb.scale);lb.lastDist=dist;}e.preventDefault();},{passive:false});
